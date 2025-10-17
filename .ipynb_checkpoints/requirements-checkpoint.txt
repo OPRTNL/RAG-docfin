@@ -1,3 +1,4 @@
 langchain_pinecone==0.2.2
 cryptography>=3.1
+langchain_experimental
 lark
