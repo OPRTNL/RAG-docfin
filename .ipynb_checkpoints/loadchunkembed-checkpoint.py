@@ -30,7 +30,12 @@ print('nombre de docs', len([f for f in os.listdir("./DIC/")]))
 
 
 # Charger le modèle d'encodage de texte BAAI/bge-small-en-v1.5 de HuggingFace
-embedding = HuggingFaceEmbeddings(model_name="HIT-TMG/KaLM-embedding-multilingual-mini-instruct-v1", encode_kwargs={"normalize_embeddings" : True})
+embedding = HuggingFaceEmbeddings(model_name="HIT-TMG/KaLM-embedding-multilingual-mini-instruct-v1",
+                                  model_kwargs={'device': 'cuda'}, # Pin the model to the GP
+                                  encode_kwargs={
+                                      'normalize_embeddings': True,
+                                      'batch_size': 32 # Process queries in batches
+                                  })
 
 text_splitter = SemanticChunker(embedding)
 
