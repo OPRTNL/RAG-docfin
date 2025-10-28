@@ -3,3 +3,11 @@ cryptography>=3.1
 langchain_experimental
 lark
 sentence-transformers
+langchain
+langchain-community
+langchain-experimental
+torch
+transformers
+sentence-transformers
+json-repair
+langchain_google_genai
