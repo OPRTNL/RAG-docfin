@@ -13,7 +13,7 @@ def rerank(query: str, docs: List, use_rerank: bool = False):
     if not use_rerank:
         return docs
     ce = _get_reranker()
-    pairs = [(query, d.text) for d in docs]
+    pairs = [(query, getattr(d, "text", getattr(d, "page_content", ""))) for d in docs]
     scores = ce.predict(pairs)
     order = np.argsort(-scores)
     return [docs[i] for i in order]
