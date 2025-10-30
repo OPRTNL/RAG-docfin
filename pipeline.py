@@ -10,6 +10,9 @@ from pinecone import Pinecone, ServerlessSpec
 from pinecone.exceptions import NotFoundException
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from huggingface_hub import login # <-- Import the login function
+from rag_engine.llm_loader import load_llm
+from rag_engine.embeddings import embed_texts
+from rag_engine.retriever import rerank
 
 # Charger le modèle d'encodage de texte BAAI/bge-small-en-v1.5 de HuggingFace
 embedding = HuggingFaceEmbeddings(model_name="HIT-TMG/KaLM-embedding-multilingual-mini-instruct-v1",
@@ -33,49 +36,35 @@ vector_store = PineconeVectorStore(
     embedding = embedding
 )
 
-model_id = "CohereForAI/c4ai-command-r-v01"
+# ✅ Nouveau chargement optimisé
+TOK, LLM = load_llm()
 
-# Chargement de la configuration du modèle
-model_config = transformers.AutoConfig.from_pretrained(model_id)
+from langchain_huggingface.llms import HuggingFacePipeline
+from transformers import pipeline
 
-# Initialiser le tokeniseur
-tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
-
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_quant_type="nf4"
-)
-
-# Load the model with quantization
-model = transformers.AutoModelForCausalLM.from_pretrained(
-    model_id,
-    trust_remote_code=True,
-    config=model_config,
-    quantization_config=quantization_config, # Apply the config here
-    device_map='auto'
-)
-
-llm=HuggingFacePipeline(
+llm = HuggingFacePipeline(
     pipeline=pipeline(
         "text-generation",
-        model=model,
-        tokenizer=tokenizer,
+        model=LLM,
+        tokenizer=TOK,
         max_new_tokens=128,
         do_sample=False,
-        return_full_text=False  # Très important ! On ne veut pas le prompt initial
+        return_full_text=False
     )
 )
 
+
 from langchain_core.prompts import PromptTemplate
 
-prompt_template = PromptTemplate.from_template("""
-Tu es un assistant d'extraction d'informations, spécialisé dans la documentation financière. Ta seule mission est de répondre en à la question en localisant et en rapportant l'information exacte trouvée dans le context fourni. Formule ta réponse en utilisant les mots exacts du texte. La réponse doit être une phrase complète, concise et grammaticalement correcte.
+prompt_template = PromptTemplate.from_template("""Provide a short and precise answer to the following question, based solely on the information from the documents below:
 
-Contexte : {context}
-Question : {question}
-Réponse :
-""")
+---------------------
+{context}
+---------------------
+
+Use the information in these documents to answer the question in a factual and concise manner. If the answer to the question is not contained within these documents, respond simply with "Unknown.
+
+Question: {question}""")
 
 def build_context(docs):
     context = ""
@@ -84,14 +73,22 @@ def build_context(docs):
         context += "\n"
         context += doc.page_content
         context += "\n\n"
+    return context
         
 def rag_pipeline(query):
-    # Tout d'abord, on recherche les documents
-    retrieved_docs = vector_store.similarity_search(query)
-    # Ensuite, on injecte les documents dans le prompt
+    # Recherche Pinecone
+    docs = vector_store.similarity_search(query, k=20) # large pool
+    # rerank désactivé par défaut pour vitesse
+    retrieved_docs = rerank(query, docs, use_rerank=True)[:5]
+    
+    # Construit le contexte
+    context = build_context(retrieved_docs)
+
+    # Template
     prompt = prompt_template.invoke({
         "question": query,
-        "context": build_context(retrieved_docs)
+        "context": context
     })
-    # Enfin, on envoit l'intégralité du prompt au LLM
+
+    # Inference
     return llm.invoke(prompt).strip()

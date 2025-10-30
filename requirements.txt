@@ -11,3 +11,7 @@ transformers
 sentence-transformers
 json-repair
 langchain_google_genai
+sentence-transformers 
+joblib 
+bitsandbytes
+faiss-cpu
