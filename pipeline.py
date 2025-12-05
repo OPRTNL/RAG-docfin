@@ -79,7 +79,7 @@ def rag_pipeline(query):
     # Recherche Pinecone
     docs = vector_store.similarity_search(query, k=20)
     retrieved_docs = rerank(query, docs, use_rerank=True)[:5]
-
+    #def search_doc => docs
     
     # Construit le contexte
     context = build_context(retrieved_docs)

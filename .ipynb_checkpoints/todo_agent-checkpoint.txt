@@ -1,0 +1,17 @@
+
+Pipeline => Rag pipeline
+** modifier ce bloc pour apporter un tool au modèle
+    docs = vector_store.similarity_search(query, k=20)
+    retrieved_docs = rerank(query, docs, use_rerank=True)[:5]
+    #def search_doc => docs
+    
+    # Construit le contexte
+    context = build_context(retrieved_docs)
+
+Apeller create_agent depuis langchain
+
+Tout migrer avec un modèle api ext
+https://openrouter.ai/
+
+Inclure avec langchain
+https://openrouter.ai/docs/guides/community/langchain
