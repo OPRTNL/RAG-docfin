@@ -16,3 +16,4 @@ joblib
 bitsandbytes
 faiss-cpu
 langchain-openai
+langsmith>=0.1.0

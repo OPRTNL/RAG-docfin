@@ -15,3 +15,7 @@ https://openrouter.ai/
 
 Inclure avec langchain
 https://openrouter.ai/docs/guides/community/langchain
+
+Partir sur une structure Red chef :
+ => https://whimsical.com/9cCo1dXHPjaGNDLGYpGbrt
+ => https://docs.langchain.com/oss/python/langchain/middleware/built-in#tool-call-limit

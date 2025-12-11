@@ -4,8 +4,8 @@ import torch
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-#import transformers
-#import torch
+from langsmith import Client
+
 from langchain_huggingface.llms import HuggingFacePipeline
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_pinecone.vectorstores import PineconeVectorStore
@@ -31,6 +31,12 @@ from rag_engine.embeddings import embed_texts
 
 # 1. Configuration et Login
 load_dotenv()
+
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ["LANGSMITH_TRACING"] = "true"
+else:
+    print("⚠️ Attention : Clé LANGSMITH_API_KEY manquante. L'observabilité est désactivée.")
+
 pinecone_api_key = os.getenv('PINECONE_API_KEY')
 huggingface_api_key = os.getenv('HUGGINGFACE_API_KEY')
 
