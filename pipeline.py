@@ -9,12 +9,13 @@ from langsmith import Client
 from langchain_huggingface.llms import HuggingFacePipeline
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_pinecone.vectorstores import PineconeVectorStore
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.tools.retriever import create_retriever_tool
-from langchain.tools import Tool
+from langchain.agents import create_agent #create_tool_calling_agent,AgentExecutor 
+from langchain.agents.middleware import ToolCallLimitMiddleware, ModelCallLimitMiddleware
+#from langchain.tools.retriever import create_retriever_tool
+from langchain.tools import tool
 from langchain_openai import ChatOpenAI
-from langchain import hub
-from langchain.prompts import ChatPromptTemplate
+# from langchain import hub
+# from langchain.prompts import ChatPromptTemplate
 import sentence_transformers
 
 from huggingface_hub import login
@@ -73,10 +74,13 @@ vector_store = PineconeVectorStore(
 )
 
 # 4 outils retriver pour l'agent
-
+@tool
 def smart_retrieval(query: str) -> str:
     # 1. Recherche large dans Pinecone (k=20 au lieu de 5)
-    """Cherche large (k=20) puis affine avec le reranker pour une précision maximale."""
+    """Utilise cet outil pour trouver des informations précises dans les documents financiers indexés.
+    Args:
+        query: recherche des termes proches de la requête utilisateur.
+        """
     docs = vector_store.similarity_search(query, k=20)
     
     # 2. Utilisation de votre fonction rerank existante pour garder le Top 5 pertinent
@@ -91,13 +95,8 @@ def smart_retrieval(query: str) -> str:
     return context
 
 # Création de l'outil personnalisé
-tool_smart_retriever = Tool(
-    name="recherche_documents_financiers",
-    func=smart_retrieval,
-    description="Utilise cet outil pour trouver des informations précises dans les documents financiers indexés."
-)
 
-tools = [tool_smart_retriever]
+tools = [smart_retrieval]
 
 # 5. LLM (Gemini 2.5 Flash via OpenRouter API)
 llm = ChatOpenAI(
@@ -116,21 +115,158 @@ system_prompt = (
     "Maintiens une réponse courte, précise et factuelle en français."
 )
 
-# Le prompt Tool Calling est plus simple et plus stable que ReAct
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", system_prompt),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ]
-)
+# # Le prompt Tool Calling est plus simple et plus stable que ReAct
+# prompt = ChatPromptTemplate.from_messages(
+#     [
+#         ("system", system_prompt),
+#         ("human", "{input}"),
+#         ("placeholder", "{agent_scratchpad}"),
+#     ]
+# )
 
 # L'agent Tool Calling est le plus stable pour cette tâche
-agent = create_tool_calling_agent(llm, tools, prompt)
+search_agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
 
+SCRIPTDOCTOR_AGENT_PROMPT = ("""
+    # ROLE
+    Tu es le "Financial Storyteller", un expert en communication stratégique spécialisé dans la vulgarisation financière. 
+    Ta mission est de transformer des données financières brutes en scripts de discours captivants pour un public de non-financiers.
+    
+    # OBJECTIF
+    Traduire la complexité comptable en vision stratégique narrative.
+    
+    # PUBLIC CIBLE
+    Non-financiers (employés, clients, grand public). Ils veulent comprendre :
+    1. La santé de l'entreprise.
+    2. La direction stratégique.
+    3. L'impact concret sur leur quotidien.
+    
+    # CONTRAINTE TEMPORELLE (IMPÉRATIF)
+    **Le discours ne doit pas dépasser 3 minutes.**
+    Cela correspond à environ **350 à 450 mots maximum**.
+    Tu dois être synthétique, percutant et aller droit au but. Si le sujet est vaste, coupe les détails techniques pour garder l'essentiel.
+    
+    # DIRECTIVES DE RÉDACTION (STYLE ET TON)
+    1. **Langage Parlé :** Phrases courtes. Voix active. Écris pour l'oreille.
+    2. **Zéro Jargon :** Pas d'EBITDA, de CAPEX ou de BFR sans une analogie immédiate (ex: "Le carburant pour avancer" au lieu de "Trésorerie").
+    3. **Règle du "1 Chiffre = 1 Impact" :** Sélectionne maximum 3 chiffres clés pour tout le discours.
+    4. **Connexion Émotionnelle :** Utilise le "Nous" et le "Vous".
+    
+    # INSTRUCTIONS DE FORMATAGE (SCÉNOGRAPHIE)
+    Inclus des didascalies pour guider l'orateur :
+    - **[GRAS]** : Mots à accentuer vocalement.
+    - `[PAUSE]` : Silence dramatique (compter 2-3 secondes).
+    - `(Note : ...)` : Indication d'émotion ou de gestuelle.
+    
+    # FORMAT DE SORTIE (STRICT)
+    Tu dois impérativement structurer ta réponse selon le modèle ci-dessous :
+    
+    ---
+    **TITRE :** [Titre court et accrocheur résumant le message]
+    **DURÉE ESTIMÉE :** ~[X] minutes
+    **INTENTION :** [Ex: Rassurant, Mobilisateur, Célébration]
+    **LES 3 POINTS CLÉS :**
+    * [Point 1]
+    * [Point 2]
+    * [Point 3]
+    
+    **SCRIPT :**
+    [Insérer ici le texte du discours avec les didascalies de mise en scène]
+    ---
+    
+    # PROCESSUS DE RÉFLEXION (CHAIN OF THOUGHT)
+    Avant de générer le format de sortie :
+    1. Identifie le message unique le plus important.
+    2. Sélectionne les données qui soutiennent ce message (jette le reste).
+    3. Vérifie que le volume de texte tient dans les 400 mots.
+    
+    # EXEMPLES (FEW-SHOT LEARNING)
+    
+    **Exemple 1 (Contexte : Croissance)**
+    *Entrée Superviseur :* "CA +15% YOY, lancement réussi produit X."
+    *Ta Sortie :*
+    **TITRE :** Notre pari gagnant
+    **DURÉE ESTIMÉE :** ~1 min
+    **INTENTION :** Fierté collective
+    **LES 3 POINTS CLÉS :**
+    * Succès du produit X
+    * Croissance des ventes de 15%
+    * Remerciement des équipes
+    
+    **SCRIPT :**
+    (Grand sourire) Bonjour à tous.
+    L'année dernière, nous avons fait un pari audacieux avec le produit X.
+    Aujourd'hui, les chiffres sont tombés : nos ventes ont bondi de **15%**. [PAUSE]
+    C'est la preuve que votre audace paie. Merci à tous.
+    
+    ---
+    **DÉBUT DE LA TÂCHE**
+    Attends les données financières."""
+)
+
+script_agent = create_agent(
+    llm,
+    system_prompt=SCRIPTDOCTOR_AGENT_PROMPT,
+)
+
+@tool
+def search_doc(request: str) -> str:
+    """Search database for relevant informations.
+    
+    Do this when the user wants get relevant financial informations about his request.
+
+    Input: Natural language financial request (e.g., 'Quel est l'objectif du fond FCP ?')
+    """
+    result = search_agent.invoke({
+        "messages": [{"role": "user", "content": request}]
+    })
+    return result["messages"][-1].text
+
+
+@tool
+def write_script(request: str) -> str:
+    """Generates a compelling 3-minute speech script for non-financial audiences based on financial data.
+    
+    Use this tool when you need to communicate financial results, KPIs, or strategic shifts to employees, clients, or the general public. 
+    It translates complex accounting terms into simple metaphors/stories and structures the output with stage directions (tone, pauses) for the speaker.
+    
+    Input: Raw financial documentation exerpt, context, and key metrics (e.g., "Revenue +20%, EBITDA negative due to investment").
+    """
+    result = script_agent.invoke({
+        "messages": [{"role": "user", "content": request}]
+    })
+    return result["messages"][-1].text
+
+
+SUPERVISOR_PROMPT = (
+    "You are a helpful personal assistant. "
+    "You write scripts of 3 mins speech script based on searched documentation."
+    "Break down user requests into appropriate tool calls and coordinate the results. "
+    "When a request involves multiple actions, use multiple tools in sequence."
+)
+
+supervisor_agent = create_agent(
+    model=llm,
+    tools=[search_doc, write_script],
+    system_prompt=SUPERVISOR_PROMPT,
+    middleware=[
+        ModelCallLimitMiddleware(
+            thread_limit=5,
+            run_limit=5,
+            exit_behavior="end",
+        ),
+        ToolCallLimitMiddleware(
+            tool_name="search",
+            thread_limit=5,
+            run_limit=3,
+        )
+    ],
+)
+
+"""
 # L'Executor
 agent_executor = AgentExecutor(
-    agent=agent, 
+    agent=search_agent, 
     tools=tools, 
     verbose=True,
     # Le Tool Calling gère naturellement ces erreurs, mais on peut laisser la sécurité
@@ -146,7 +282,7 @@ def rag_pipeline(query):
     except Exception as e:
         return f"Erreur critique lors de l'exécution de l'agent : {str(e)}"
 
-"""
+
 # 5 chargement du LLM
 # ✅ Nouveau chargement optimisé
 TOK, LLM_MODEL = load_llm()

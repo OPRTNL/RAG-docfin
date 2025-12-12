@@ -1,9 +1,9 @@
-langchain_pinecone==0.2.2
+langchain_pinecone
 cryptography>=3.1
 langchain_experimental
 lark
 sentence-transformers
-langchain
+langchain>=1.0
 langchain-community
 langchain-experimental
 torch
