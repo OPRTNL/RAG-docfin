@@ -21,6 +21,10 @@ import sentence_transformers
 from huggingface_hub import login
 from rag_engine.retriever import rerank
 
+# --- HITL ---
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 """
 from transformers import pipeline
@@ -345,10 +349,25 @@ def create_slides(request: str) -> str:
     Raw financial excerpts, context (if any), and key metrics
     (e.g. “Revenue +20%, negative EBITDA due to investment”, “FCP performance +4.2% over 12 months, moderate volatility”).
     """
-    result = script_agent.invoke({
+    result = slide_agent.invoke({
         "messages": [{"role": "user", "content": request}]
     })
     return result["messages"][-1].text
+
+# --- À INSÉRER AVANT LA CRÉATION DU SUPERVISOR_AGENT ---
+
+# 1. Configuration de la mémoire (Obligatoire pour le HITL)
+# Permet de sauvegarder l'état de l'agent pendant qu'il attend la validation humaine
+memory = MemorySaver()
+
+# 2. Configuration du Middleware HITL
+# On demande une interruption explicite avant l'exécution de l'outil "write_script"
+hitl_middleware = HumanInTheLoopMiddleware(
+    interrupt_on={
+        "write_script": True,
+        "create_slides": True
+    }
+)
 
 SUPERVISOR_PROMPT = (
     "You are a helpful personal assistant. "
@@ -362,6 +381,7 @@ supervisor_agent = create_agent(
     tools=[search_doc, write_script,create_slides],
     system_prompt=SUPERVISOR_PROMPT,
     middleware=[
+        hitl_middleware,
         ModelCallLimitMiddleware(
             thread_limit=5,
             run_limit=5,
@@ -371,126 +391,76 @@ supervisor_agent = create_agent(
             tool_name="search",
             thread_limit=5,
             run_limit=3,
-        )
+        )        
     ],
+    checkpointer=memory
 )
 
-"""
-# L'Executor
-agent_executor = AgentExecutor(
-    agent=search_agent, 
-    tools=tools, 
-    verbose=True,
-    # Le Tool Calling gère naturellement ces erreurs, mais on peut laisser la sécurité
-    handle_parsing_errors=True,
-    max_iterations=5
-)
+# --- REMPLACEMENT DE LA FONCTION D'EXÉCUTION ---
 
-# 7. Pipeline Principal
-def rag_pipeline(query):
-    try:
-        response = agent_executor.invoke({"input": query})
-        return response["output"]
-    except Exception as e:
-        return f"Erreur critique lors de l'exécution de l'agent : {str(e)}"
-
-
-# 5 chargement du LLM
-# ✅ Nouveau chargement optimisé
-TOK, LLM_MODEL = load_llm()
-
-from transformers import pipeline, StoppingCriteria, StoppingCriteriaList
-
-#creation de la classe critères d'arrets
-class StopOnString(StoppingCriteria):
-
-    def __init__(self, stop_strings, tokenizer):
-        self.stop_strings = stop_strings
-        self.tokenizer = tokenizer
+def run_interactive_pipeline(user_query: str, thread_id: str = "session_default"):
+    """
+    Exécute le pipeline RAG avec supervision humaine.
+    Permet de valider ou de changer le format (Slide <-> Script) à la volée.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
     
-    def __call__(self, input_ids, scores, **kwargs):
-        # On décode les 100 derniers tokens pour être sûr de capter le motif
-        # même si le modèle le génère morceau par morceau
-        window_size = 100
-        start_idx = max(0, input_ids.shape[1] - window_size)
-        generated_text = self.tokenizer.decode(input_ids[0][start_idx:], skip_special_tokens=True)
+    print(f"\n🚀 Démarrage : '{user_query}'")
+    
+    # 1. Lancement initial
+    result = supervisor_agent.invoke(
+        {"messages": [("user", user_query)]},
+        config=config
+    )
+
+    # 2. Vérification de l'interruption
+    snapshot = supervisor_agent.get_state(config)
+    
+    if snapshot.next:
+        # Récupération de l'action proposée
+        last_msg = snapshot.values["messages"][-1]
         
-        for s in self.stop_strings:
-            if s in generated_text:
-                return True
-        return False
+        if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+            tool_call = last_msg.tool_calls[0]
+            tool_name = tool_call['name']
+            
+            # Cas A : L'agent veut faire des SLIDES
+            if tool_name == "create_slides":
+                print(f"\n📊 PROPOSITION : L'agent veut générer des SLIDES.")
+                user_input = input("Choix : [V]alider, [C]hanger pour un Script, [A]nnuler : ").lower()
+                
+                if user_input == 'c':
+                    print("🔄 Bascule vers le mode SCRIPT...")
+                    # On force le changement d'intention
+                    supervisor_agent.update_state(config, {"messages": [{
+                        "role": "user", 
+                        "content": "Change de format : je ne veux pas de slides, rédige-moi un SCRIPT de discours à la place."
+                    }]})
+                    result = supervisor_agent.invoke(None, config=config)
+                
+                elif user_input == 'v':
+                    print("✅ Validation des Slides...")
+                    result = supervisor_agent.invoke(Command(resume="approve"), config=config)
 
-# Initialisation des critères d'arrêt
-# On veut qu'il s'arrête dès qu'il tente d'écrire "Observation:" lui-même
+            # Cas B : L'agent veut faire un SCRIPT
+            elif tool_name == "write_script":
+                print(f"\n🎙️ PROPOSITION : L'agent veut rédiger un SCRIPT.")
+                user_input = input("Choix : [V]alider, [C]hanger pour des Slides, [A]nnuler : ").lower()
+                
+                if user_input == 'c':
+                    print("🔄 Bascule vers le mode SLIDES...")
+                    # On force le changement d'intention
+                    supervisor_agent.update_state(config, {"messages": [{
+                        "role": "user", 
+                        "content": "Change de format : je ne veux pas de discours, fais-moi 3 SLIDES synthétiques à la place."
+                    }]})
+                    result = supervisor_agent.invoke(None, config=config)
+                
+                elif user_input == 'v':
+                    print("✅ Validation du Script...")
+                    result = supervisor_agent.invoke(Command(resume={"action": "approve"}), config=config)
 
-stop_words = ["Observation:", "\nObservation:", "Observation", "Final Answer:", "\nFinal Answer:"]
-stopping_criteria = StoppingCriteriaList([
-    StopOnString(stop_words, TOK)
-])
-
-pipe = pipeline(
-    "text-generation",
-    model=LLM_MODEL,
-    tokenizer=TOK,
-    max_new_tokens=512,
-    do_sample=False,
-    return_full_text=False,
-    pad_token_id=TOK.eos_token_id,
-    stopping_criteria=stopping_criteria
-)
-
-llm = HuggingFacePipeline(
-    pipeline=pipe, 
-    model_kwargs={"stop": stop_words}
-)
-
-
-#6 création de l'agent
-
-template = '''Answer the following questions as best you can. You have access to the following tools:
-
-{tools}
-
-Use the following format:
-
-Question: the input question you must answer
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question.
-
-IMPORTANT GUIDELINES:
-1. Provide a short and precise answer based SOLELY on the "Observation" from the tool.
-2. If the tool returns "Unknown" or low relevance data, say "Unknown".
-3. Do not make up information.
-4. STOP generating immediately after writing "Action Input". DO NOT write "Observation" yourself.
-
-Begin!
-
-Question: {input}
-Thought:{agent_scratchpad}'''
-
-prompt = PromptTemplate.from_template(template)
-
-# La création de l'agent reste identique, mais elle utilisera ce nouveau prompt
-agent = create_react_agent(llm, tools, prompt)
-
-
-agent_executor = AgentExecutor(
-    agent=agent, 
-    tools=tools, 
-    verbose=True,
-    handle_parsing_errors=True,
-    max_iterations=5# Important pour les modèles locaux qui formatent parfois mal la sortie
-)
-
-def rag_pipeline(query):
-    try:
-        response = agent_executor.invoke({"input": query})
-        return response["output"]
-    except Exception as e:
-        return f"Erreur lors de l'exécution de l'agent : {str(e)}"
-
-"""
+    # 3. Retour du résultat final
+    if result and "messages" in result:
+        return result["messages"][-1].content
+    return "Aucune réponse générée."
