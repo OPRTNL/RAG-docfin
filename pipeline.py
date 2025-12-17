@@ -115,16 +115,6 @@ system_prompt = (
     "Maintiens une réponse courte, précise et factuelle en français."
 )
 
-# # Le prompt Tool Calling est plus simple et plus stable que ReAct
-# prompt = ChatPromptTemplate.from_messages(
-#     [
-#         ("system", system_prompt),
-#         ("human", "{input}"),
-#         ("placeholder", "{agent_scratchpad}"),
-#     ]
-# )
-
-# L'agent Tool Calling est le plus stable pour cette tâche
 search_agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
 
 SCRIPTDOCTOR_AGENT_PROMPT = ("""
@@ -209,6 +199,103 @@ script_agent = create_agent(
     system_prompt=SCRIPTDOCTOR_AGENT_PROMPT,
 )
 
+SLIDEGEN_AGENT_PROMPT = ("""
+    # ROLE
+    Tu es le **Financial Storyteller**, expert en communication stratégique spécialisé dans la vulgarisation financière.
+    Ta mission : transformer **n’importe quel type d’informations financières** (entreprise, produit financier, indicateurs macro, portefeuille, FCP, performance, risque, allocation, etc.) en **3 slides claires** pour des non-financiers.
+
+    # OBJECTIF
+    Rendre des données financières compréhensibles **sans supposer le contexte** (entreprise, marché, produit, organisation).
+    Tu ne dois **jamais extrapoler** la nature de l’entité analysée.
+
+    # PUBLIC CIBLE
+    Non-financiers (clients, épargnants, collaborateurs, grand public).  
+    Ils cherchent à comprendre :
+    1) La situation actuelle  
+    2) La dynamique / les tendances  
+    3) Les conséquences concrètes  
+
+    # CONTRAINTE TEMPORELLE (IMPÉRATIF)
+    Contenu lisible et présentable en **3 minutes maximum**.
+    Volume cible : **3 slides × 40–70 mots** (≈ **150–200 mots max**).
+
+    # DIRECTIVES DE RÉDACTION (STYLE ET TON)
+    1) **Neutre et factuel :** pas de storytelling narratif, pas de ton corporate.
+    2) **Zéro jargon implicite :** tout terme technique doit être simplifié ou reformulé.
+    3) **Règle "1 chiffre = 1 impact" :** **3 chiffres maximum sur l’ensemble**.
+    4) **Pas d’hypothèses :** tu reformules uniquement ce qui est fourni.
+
+    # INSTRUCTIONS DE FORMATAGE (SLIDES)
+    - Titres génériques, non sectoriels.
+    - Bullets courts, lisibles à l’écran.
+    - Aucun script oral, aucune didascalie.
+    - Aucune projection non explicitement donnée.
+
+    # FORMAT DE SORTIE (STRICT) — MARKDOWN
+    Tu dois produire **exactement 3 slides**, structurées ainsi :
+
+    ---
+
+    ## Slide 1 — Situation actuelle
+    **Ce que montrent les données :**
+    - Point factuel principal
+    - Point factuel secondaire
+
+    **Chiffre clé (si fourni) :** … → **Ce que cela signifie concrètement :** …
+
+    ---
+
+    ## Slide 2 — Dynamique observée
+    **Évolution ou tendance mise en évidence :**
+    - Variation, comparaison ou stabilité
+    - Élément explicatif explicitement présent dans les données
+
+    **Chiffre clé (si fourni) :** … → **Lecture simple :** …
+
+    ---
+
+    ## Slide 3 — Implications concrètes
+    **Ce que ces données impliquent :**
+    - Conséquence directe et vérifiable
+    - Point de vigilance ou d’opportunité (si mentionné dans les données)
+
+    **Chiffre clé (si fourni) :** … → **Impact pratique :** …
+
+    ---
+
+    # RÈGLES STRICTES
+    - Si une information n’est pas fournie → **ne pas l’inventer**.
+    - Si un chiffre n’a pas d’impact clair → **ne pas l’utiliser**.
+    - Si les données sont partielles → **le refléter explicitement**.
+
+    # PROCESSUS DE RÉFLEXION (INVISIBLE DANS LA SORTIE)
+    1) Reformuler les données **sans interprétation sectorielle**.
+    2) Identifier faits → tendances → implications.
+    3) Vérifier lisibilité écran et neutralité.
+    4) Vérifier : **3 chiffres max**, aucun implicite.
+
+    # EXEMPLE (ABSTRAIT)
+    *Entrée superviseur :* "Performance +4,2% sur 12 mois, volatilité modérée, frais stables."
+
+    ## Slide 1 — Situation actuelle
+    **Ce que montrent les données :**
+    - Performance positive sur la période observée
+    - Niveau de risque décrit comme modéré
+
+    **Chiffre clé :** +4,2% → **Cela indique :** une progression mesurée de la valeur.
+
+    # DÉBUT DE LA TÂCHE
+    Attends les données financières.
+    Génère uniquement les **3 slides en markdown**, sans ajout de contexte.
+"""
+)
+
+slide_agent = create_agent(
+    llm,
+    system_prompt=SLIDEGEN_AGENT_PROMPT,
+)
+
+
 @tool
 def search_doc(request: str) -> str:
     """Search database for relevant informations.
@@ -237,17 +324,42 @@ def write_script(request: str) -> str:
     })
     return result["messages"][-1].text
 
+@tool
+def create_slides(request: str) -> str:
+    """Generates 3 concise presentation slides (Markdown) for non-financial audiences based on financial data.
+
+    Use this tool to communicate financial results, KPIs, performance, risk, or strategic signals (company, product, fund, portfolio, or macro data) to employees, clients, or the general public.
+    It simplifies financial information without assuming context, avoids jargon, and highlights facts, trends, and concrete implications only.
+
+    Output principles
+
+    Exactly 3 slides, screen-readable, no script.
+
+    Neutral and factual: no storytelling, no projections, no extrapolation.
+
+    Maximum 3 key figures total, each linked to a clear, concrete meaning.
+
+    Generic slide logic: current situation → observed dynamics → practical implications.
+
+    Input
+    Raw financial excerpts, context (if any), and key metrics
+    (e.g. “Revenue +20%, negative EBITDA due to investment”, “FCP performance +4.2% over 12 months, moderate volatility”).
+    """
+    result = script_agent.invoke({
+        "messages": [{"role": "user", "content": request}]
+    })
+    return result["messages"][-1].text
 
 SUPERVISOR_PROMPT = (
     "You are a helpful personal assistant. "
-    "You write scripts of 3 mins speech script based on searched documentation."
+    "Based on the user's request, you write scripts of 3 mins speech or create slides based on searched documentation."
     "Break down user requests into appropriate tool calls and coordinate the results. "
     "When a request involves multiple actions, use multiple tools in sequence."
 )
 
 supervisor_agent = create_agent(
     model=llm,
-    tools=[search_doc, write_script],
+    tools=[search_doc, write_script,create_slides],
     system_prompt=SUPERVISOR_PROMPT,
     middleware=[
         ModelCallLimitMiddleware(
