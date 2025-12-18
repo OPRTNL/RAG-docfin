@@ -105,7 +105,7 @@ tools = [smart_retrieval]
 # 5. LLM (Gemini 2.5 Flash via OpenRouter API)
 llm = ChatOpenAI(
     # Le modèle OpenRouter pour Gemini 2.5 Flash
-    model="openai/gpt-oss-20b:free", 
+    model="nex-agi/deepseek-v3.1-nex-n1:free", 
     temperature=0, 
     # Le base_url et l'API key sont cruciaux pour OpenRouter
     openai_api_key=openrouter_api_key,
@@ -365,7 +365,8 @@ memory = MemorySaver()
 hitl_middleware = HumanInTheLoopMiddleware(
     interrupt_on={
         "write_script": True,
-        "create_slides": True
+        "create_slides": True,
+        "search_doc": True
     }
 )
 
@@ -398,69 +399,79 @@ supervisor_agent = create_agent(
 
 # --- REMPLACEMENT DE LA FONCTION D'EXÉCUTION ---
 
-def run_interactive_pipeline(user_query: str, thread_id: str = "session_default"):
-    """
-    Exécute le pipeline RAG avec supervision humaine.
-    Permet de valider ou de changer le format (Slide <-> Script) à la volée.
-    """
+def run_interactive_pipeline(user_query: str, thread_id: str = "session_deepseek"):
     config = {"configurable": {"thread_id": thread_id}}
-    
     print(f"\n🚀 Démarrage : '{user_query}'")
     
-    # 1. Lancement initial
-    result = supervisor_agent.invoke(
-        {"messages": [("user", user_query)]},
-        config=config
-    )
-
-    # 2. Vérification de l'interruption
-    snapshot = supervisor_agent.get_state(config)
+    current_input = {"messages": [("user", user_query)]}
     
-    if snapshot.next:
-        # Récupération de l'action proposée
-        last_msg = snapshot.values["messages"][-1]
-        
-        if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-            tool_call = last_msg.tool_calls[0]
-            tool_name = tool_call['name']
+    while True:
+        try:
+            # Exécution de l'agent
+            result = supervisor_agent.invoke(current_input, config=config)
             
-            # Cas A : L'agent veut faire des SLIDES
-            if tool_name == "create_slides":
-                print(f"\n📊 PROPOSITION : L'agent veut générer des SLIDES.")
-                user_input = input("Choix : [V]alider, [C]hanger pour un Script, [A]nnuler : ").lower()
-                
-                if user_input == 'c':
-                    print("🔄 Bascule vers le mode SCRIPT...")
-                    # On force le changement d'intention
-                    supervisor_agent.update_state(config, {"messages": [{
-                        "role": "user", 
-                        "content": "Change de format : je ne veux pas de slides, rédige-moi un SCRIPT de discours à la place."
-                    }]})
-                    result = supervisor_agent.invoke(None, config=config)
-                
-                elif user_input == 'v':
-                    print("✅ Validation des Slides...")
-                    result = supervisor_agent.invoke(Command(resume="approve"), config=config)
+            # Vérification de l'état
+            snapshot = supervisor_agent.get_state(config)
+            
+            if not snapshot.next:
+                if result and "messages" in result:
+                    return result["messages"][-1].content
+                return "Terminé."
 
-            # Cas B : L'agent veut faire un SCRIPT
-            elif tool_name == "write_script":
-                print(f"\n🎙️ PROPOSITION : L'agent veut rédiger un SCRIPT.")
-                user_input = input("Choix : [V]alider, [C]hanger pour des Slides, [A]nnuler : ").lower()
+            # Analyse de l'interruption
+            last_msg = snapshot.values["messages"][-1]
+            if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+                tool_call = last_msg.tool_calls[0]
+                tool_name = tool_call['name']
                 
-                if user_input == 'c':
-                    print("🔄 Bascule vers le mode SLIDES...")
-                    # On force le changement d'intention
-                    supervisor_agent.update_state(config, {"messages": [{
-                        "role": "user", 
-                        "content": "Change de format : je ne veux pas de discours, fais-moi 3 SLIDES synthétiques à la place."
-                    }]})
-                    result = supervisor_agent.invoke(None, config=config)
-                
-                elif user_input == 'v':
-                    print("✅ Validation du Script...")
-                    result = supervisor_agent.invoke(Command(resume={"action": "approve"}), config=config)
+                # --- CAS 1 : L'agent lance une RECHERCHE (Point de décision forcé) ---
+                if tool_name == "search_doc":
+                    print(f"\n🔎 RECHERCHE EN COURS : L'agent a besoin d'informations.")
+                    print("⚠️  Format de sortie obligatoire. Choisissez le livrable final :")
+                    print("  [1] 🎙️  SCRIPT (Discours)")
+                    print("  [2] 📊  SLIDES (Présentation)")
+                    
+                    choice = input("Votre choix (1 ou 2) : ").strip()
+                    
+                    # On définit l'instruction de formatage à injecter APRES la recherche
+                    if choice == '1':
+                        print("✅ Recherche validée -> Destination : SCRIPT.")
+                        format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS rédiger un SCRIPT de discours."
+                    elif choice == '2':
+                        print("✅ Recherche validée -> Destination : SLIDES.")
+                        format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS générer 3 SLIDES de présentation."
+                    else:
+                        print("Choix par défaut -> SCRIPT.")
+                        format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS rédiger un SCRIPT de discours."
 
-    # 3. Retour du résultat final
-    if result and "messages" in result:
-        return result["messages"][-1].content
-    return "Aucune réponse générée."
+                    # ASTUCE : On approuve la recherche (resume) ET on ajoute l'instruction (update)
+                    # L'agent va exécuter la recherche, puis verra ce message utilisateur juste après.
+                    current_input = Command(
+                        resume={"decisions": [{"type": "approve"}]},
+                        update={
+                            "messages": [{"role": "user", "content": format_instruction}]
+                        }
+                    )
+
+                # --- CAS 2 : L'agent lance la RÉDACTION (Script ou Slides) ---
+                elif tool_name in ["write_script", "create_slides"]:
+                    print(f"\n📝  L'agent est prêt à générer le contenu : {tool_name.upper()}")
+                    user_choice = input("  [V]alider le contenu ou [R]efuser/Modifier : ").lower()
+                    
+                    if user_choice == 'v':
+                        current_input = Command(resume={"decisions": [{"type": "approve"}]})
+                    else:
+                        feedback = input("Instruction de modification : ")
+                        # Ici, on n'utilise pas resume, on update juste l'état pour que l'agent réfléchisse à nouveau
+                        supervisor_agent.update_state(config, {
+                            "messages": [{"role": "user", "content": f"Stop. {feedback}"}]
+                        })
+                        current_input = None
+                
+                # --- CAS 3 : Autres outils ---
+                else:
+                    current_input = Command(resume={"decisions": [{"type": "approve"}]})
+
+        except Exception as e:
+            print(f"❌ Erreur : {e}")
+            break
