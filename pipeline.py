@@ -105,7 +105,7 @@ tools = [smart_retrieval]
 # 5. LLM (Gemini 2.5 Flash via OpenRouter API)
 llm = ChatOpenAI(
     # Le modèle OpenRouter pour Gemini 2.5 Flash
-    model="amazon/nova-2-lite-v1:free", 
+    model="openai/gpt-oss-20b:free", 
     temperature=0, 
     # Le base_url et l'API key sont cruciaux pour OpenRouter
     openai_api_key=openrouter_api_key,
