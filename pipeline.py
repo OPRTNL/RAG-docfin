@@ -38,7 +38,7 @@ from rag_engine.embeddings import embed_texts
 load_dotenv()
 
 if os.getenv("LANGSMITH_API_KEY"):
-    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_TRACING"] = "false"
 else:
     print("⚠️ Attention : Clé LANGSMITH_API_KEY manquante. L'observabilité est désactivée.")
 
@@ -436,10 +436,10 @@ def run_interactive_pipeline(user_query: str, thread_id: str = "session_deepseek
                     # On définit l'instruction de formatage à injecter APRES la recherche
                     if choice == '1':
                         print("✅ Recherche validée -> Destination : SCRIPT.")
-                        format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS rédiger un SCRIPT de discours."
+                        format_instruction = "IMPORTANT : Une fois les informations trouvées, utilise le tool write_script"
                     elif choice == '2':
                         print("✅ Recherche validée -> Destination : SLIDES.")
-                        format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS générer 3 SLIDES de présentation."
+                        format_instruction = "IMPORTANT : Une fois les informations trouvées, utilise le tool create_slides"
                     else:
                         print("Choix par défaut -> SCRIPT.")
                         format_instruction = "IMPORTANT : Une fois les informations trouvées, tu DOIS rédiger un SCRIPT de discours."
